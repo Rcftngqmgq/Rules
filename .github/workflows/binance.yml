@@ -1,0 +1,102 @@
+name: Sync and Compile Bybit, OKX, and Binance Rules
+
+on:
+  schedule:
+    - cron: '0 18 * * *'  # 例如每天18点触发
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rules:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout the repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Set up Git user
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+    - name: Install mihomo
+      run: |
+        version=$(curl -sL https://github.com/MetaCubeX/mihomo/releases/download/Prerelease-Alpha/version.txt)
+        curl -sL "https://github.com/MetaCubeX/mihomo/releases/download/Prerelease-Alpha/mihomo-linux-amd64-${version}.gz" | \
+          gunzip -c > /usr/local/bin/mihomo && chmod +x /usr/local/bin/mihomo
+
+    - name: Fetch Rules
+      run: |
+        mkdir -p rules/Domain  # 确保目录存在
+
+        # 下载 Bybit 规则文件
+        curl -sL "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/refs/heads/meta/geo/geosite/bybit.list" -o rules/Domain/bybit.list
+        curl -sL "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/bybit-play.list" -o rules/Domain/bybit-play.list
+
+        # 下载 OKX 规则文件
+        curl -sL "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/refs/heads/meta/geo/geosite/okx.list" -o rules/Domain/okx.list
+        curl -sL "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/okx-play.list" -o rules/Domain/okx-play.list
+
+        # 下载 Binance 规则文件
+        curl -sL "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/refs/heads/meta/geo/geosite/binance.list" -o rules/Domain/binance.list
+        curl -sL "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/binance-play.list" -o rules/Domain/binance-play.list
+
+        # 合并去重 Bybit 规则
+        cat rules/Domain/bybit.list rules/Domain/bybit-play.list | grep -v '^#' | sort -u > rules/Domain/merged_bybit.list
+
+        # 合并去重 OKX 规则
+        cat rules/Domain/okx.list rules/Domain/okx-play.list | grep -v '^#' | sort -u > rules/Domain/merged_okx.list
+
+        # 合并去重 Binance 规则
+        cat rules/Domain/binance.list rules/Domain/binance-play.list | grep -v '^#' | sort -u > rules/Domain/merged_binance.list
+
+    - name: Convert merged rules to YAML
+      run: |
+        # 转换 Bybit 规则
+        echo "payload:" > rules/Domain/bybit_combined.yaml
+        while IFS= read -r line; do
+          if [[ -n "$line" ]]; then
+            echo "  - $line" >> rules/Domain/bybit_combined.yaml
+          fi
+        done < rules/Domain/merged_bybit.list
+
+        # 转换 OKX 规则
+        echo "payload:" > rules/Domain/okx_combined.yaml
+        while IFS= read -r line; do
+          if [[ -n "$line" ]]; then
+            echo "  - $line" >> rules/Domain/okx_combined.yaml
+          fi
+        done < rules/Domain/merged_okx.list
+
+        # 转换 Binance 规则
+        echo "payload:" > rules/Domain/binance_combined.yaml
+        while IFS= read -r line; do
+          if [[ -n "$line" ]]; then
+            echo "  - $line" >> rules/Domain/binance_combined.yaml
+          fi
+        done < rules/Domain/merged_binance.list
+
+    - name: Convert Rules to MRS
+      run: |
+        # 转换 Bybit 规则
+        mihomo convert-ruleset domain yaml rules/Domain/bybit_combined.yaml rules/Domain/bybit.mrs
+
+        # 转换 OKX 规则
+        mihomo convert-ruleset domain yaml rules/Domain/okx_combined.yaml rules/Domain/okx.mrs
+
+        # 转换 Binance 规则
+        mihomo convert-ruleset domain yaml rules/Domain/binance_combined.yaml rules/Domain/binance.mrs
+
+        # 删除临时文件
+        rm -f rules/Domain/bybit.list rules/Domain/bybit-play.list rules/Domain/merged_bybit.list rules/Domain/bybit_combined.yaml
+        rm -f rules/Domain/okx.list rules/Domain/okx-play.list rules/Domain/merged_okx.list rules/Domain/okx_combined.yaml
+        rm -f rules/Domain/binance.list rules/Domain/binance-play.list rules/Domain/merged_binance.list rules/Domain/binance_combined.yaml
+
+    - name: Commit and Push Changes
+      run: |
+        git add .
+        git diff-index --quiet HEAD -- || (git commit -m "Updated Bybit, OKX, and Binance rules (merged lists -> MRS)" && git push)
